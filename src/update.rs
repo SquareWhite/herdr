@@ -29,6 +29,8 @@ const HERDR_UPDATE_COMMAND: &str = "herdr update";
 const HOMEBREW_UPDATE_COMMAND: &str = "brew update && brew upgrade herdr";
 const MISE_UPDATE_COMMAND: &str = "mise upgrade herdr";
 const NIX_UPDATE_COMMAND: &str = "update through Nix";
+/// Fork builds update from their own checkout, never from upstream releases.
+const FORK_UPDATE_COMMAND: &str = "fork/update.sh";
 const MISE_INSTALLS_DIR_ENV: &str = "MISE_INSTALLS_DIR";
 const FAKE_UPDATE_VERSION_ENV: &str = "HERDR_FAKE_UPDATE_VERSION";
 const FAKE_UPDATE_NOTES_VERSION_ENV: &str = "HERDR_FAKE_UPDATE_NOTES_VERSION";
@@ -1882,7 +1884,9 @@ fn print_running_session_update_outcomes(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn update_install_command() -> &'static str {
-    if is_homebrew_managed_install() {
+    if crate::build_info::fork_build().is_some() {
+        FORK_UPDATE_COMMAND
+    } else if is_homebrew_managed_install() {
         HOMEBREW_UPDATE_COMMAND
     } else if is_mise_managed_install() {
         MISE_UPDATE_COMMAND
@@ -1946,7 +1950,9 @@ pub(crate) fn preview_channel_rejection_for_current_install() -> Option<&'static
 
 pub(crate) fn package_manager_channel_update_guidance_for_current_install() -> Option<&'static str>
 {
-    if is_homebrew_managed_install() {
+    if crate::build_info::fork_build().is_some() {
+        Some("Fork builds don't self-update; run `fork/update.sh` in the fork checkout.")
+    } else if is_homebrew_managed_install() {
         Some("Use `brew update && brew upgrade herdr` to update Homebrew installs.")
     } else if is_mise_managed_install() {
         Some("Use `mise upgrade herdr` to update mise installs.")
@@ -2107,6 +2113,10 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
 
 /// Manual self-update command (`herdr update`).
 pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+    if crate::build_info::fork_build().is_some() {
+        return Err(fork_self_update_rejection(&crate::build_info::version()));
+    }
+
     let channel = UpdateChannel::configured();
 
     if is_homebrew_managed_install() {
@@ -2228,6 +2238,12 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
     Ok(release.version)
 }
 
+fn fork_self_update_rejection(version: &str) -> String {
+    format!(
+        "self-update is disabled for fork builds (herdr {version}); run `{FORK_UPDATE_COMMAND}` in the fork checkout"
+    )
+}
+
 fn print_saved_machine_update_notice() {
     let profiles = match crate::client::endpoint::EndpointCatalog::load_profiles() {
         Ok(profiles) => profiles,
@@ -2346,6 +2362,10 @@ fn print_outdated_integration_notice_with_updated_binary(updated_exe: &Path) {
 /// Background update check: only surface availability and release notes.
 /// Runs in a background thread at startup.
 pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+    if crate::build_info::fork_build().is_some() {
+        tracing::info!("skipping upstream update check for fork build");
+        return;
+    }
     crate::logging::update_check_started();
     if let Ok(version) = env::var(FAKE_UPDATE_VERSION_ENV) {
         let version = version.trim();
@@ -2966,6 +2986,27 @@ mod tests {
             update_install_instruction(MISE_UPDATE_COMMAND),
             "detach, run `mise upgrade herdr`, then run Herdr again to reconnect"
         );
+    }
+
+    #[test]
+    fn fork_builds_never_install_upstream_releases() {
+        assert!(crate::build_info::fork_build().is_some());
+        assert_eq!(update_install_command(), FORK_UPDATE_COMMAND);
+        assert_eq!(
+            update_install_instruction(update_install_command()),
+            "detach, run `fork/update.sh`, then run Herdr again to reconnect"
+        );
+        assert!(
+            package_manager_channel_update_guidance_for_current_install()
+                .is_some_and(|guidance| guidance.contains(FORK_UPDATE_COMMAND))
+        );
+
+        let err = self_update(SelfUpdateOptions::default()).unwrap_err();
+        assert_eq!(
+            err,
+            fork_self_update_rejection(&crate::build_info::version())
+        );
+        assert!(err.starts_with("self-update is disabled for fork builds"));
     }
 
     #[test]
