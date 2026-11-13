@@ -1181,6 +1181,8 @@ pub const Option = enum(c_int) {
     mode = 34,
     unknown_sequence = 35,
     unknown_max_bytes = 36,
+    // Upstream uses 40; the experimental Kitty image options own 40 and 41 here.
+    resize_pull_scrollback = 42,
     terminfo_name = 37,
     clipboard_read = 38,
     clipboard_write_max_bytes = 39,
@@ -1215,6 +1217,7 @@ pub const Option = enum(c_int) {
             .kitty_image_medium_shared_mem,
             .glyph_protocol,
             .title_report,
+            .resize_pull_scrollback,
             => ?*const bool,
             .kitty_image_medium_temp_file => ?*const lib.String,
             .apc_max_bytes,
@@ -1447,6 +1450,8 @@ fn setTyped(
         ),
         .unknown_max_bytes => wrapper.stream.handler.apc_handler.unknown_max_bytes =
             if (value) |ptr| ptr.* else 0,
+        .resize_pull_scrollback => wrapper.terminal.flags.resize_pull_scrollback =
+            if (value) |ptr| ptr.* else true,
         .clipboard_write_max_bytes => wrapper.stream.handler.kitty_clipboard_write_max_bytes =
             if (value) |ptr| ptr.* else kitty_clipboard.max_write_size,
         .mode, .mode_default => {
@@ -2251,6 +2256,26 @@ test "continuation internal allocation and restoration" {
         error.InvalidContinuation,
         restoreContinuation(invalid, "A"),
     );
+}
+
+test "set resize pull scrollback" {
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(
+        &lib.alloc.test_allocator,
+        &t,
+        80,
+        24,
+    ));
+    defer free(t);
+    try testing.expect(t.?.terminal.flags.resize_pull_scrollback);
+
+    const disabled = false;
+    try testing.expectEqual(Result.success, set(t, .resize_pull_scrollback, &disabled));
+    try testing.expect(!t.?.terminal.flags.resize_pull_scrollback);
+
+    // NULL restores the default.
+    try testing.expectEqual(Result.success, set(t, .resize_pull_scrollback, null));
+    try testing.expect(t.?.terminal.flags.resize_pull_scrollback);
 }
 
 test "set scrollback limits" {

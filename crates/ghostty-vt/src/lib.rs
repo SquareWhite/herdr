@@ -1071,6 +1071,19 @@ impl Terminal {
         Ok(())
     }
 
+    /// Whether growing the pane may pull scrollback rows back into view.
+    /// libghostty-vt defaults to true.
+    pub fn set_resize_pull_scrollback(&mut self, enabled: bool) -> Result<(), Error> {
+        unsafe {
+            ffi::ghostty_terminal_set(
+                self.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_RESIZE_PULL_SCROLLBACK,
+                (&enabled as *const bool).cast(),
+            )
+            .into_result()
+        }
+    }
+
     pub fn enable_kitty_graphics(&mut self) -> Result<(), Error> {
         install_png_decoder_once();
         let storage_limit = KITTY_IMAGE_STORAGE_LIMIT_BYTES;

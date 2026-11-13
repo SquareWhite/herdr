@@ -446,6 +446,12 @@
           "type": "boolean",
           "default": "true",
           "description": "Render pane images in Kitty graphics-compatible outer terminals. Applications use the standard Kitty graphics protocol through pane terminal output; the external socket pane-overlay API is no longer available. Set false to disable graphics rendering. Restart the server or reattach the client after changing it. In remote sessions, server configuration controls Kitty graphics parsing while local client configuration controls outer-terminal output."
+        },
+        {
+          "key": "terminal.resize_pull_scrollback",
+          "type": "boolean",
+          "default": "true",
+          "description": "Pull scrollback back into view when a pane grows taller, as most terminals do. Set false to keep the screen's top row in place and add blank rows below it; output that scrolled off stays in scrollback. Restart the server after changing it."
         }
       ]
     },

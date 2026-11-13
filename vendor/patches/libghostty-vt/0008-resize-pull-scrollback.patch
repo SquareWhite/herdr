@@ -1,0 +1,487 @@
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/terminal.h b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+index 6404af53..e7c3ad2e 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/terminal.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+@@ -1556,6 +1556,29 @@ typedef enum GHOSTTY_ENUM_TYPED {
+    */
+   GHOSTTY_TERMINAL_OPT_CLIPBOARD_READ = 38,
+ 
++  /**
++   * Set whether a resize may pull rows out of scrollback back into the
++   * active area.
++   *
++   * When true, growing rows reveals scrollback if the cursor is on the
++   * bottom row, and a column reflow that needs fewer rows reveals
++   * scrollback as well. When false, growing rows always appends blank rows
++   * at the bottom and a column reflow keeps the top of the active area on
++   * the same content, so a line that is fully in scrollback stays there. A
++   * soft-wrapped line with at least one row still in the active area may
++   * still unwrap back into view.
++   *
++   * This is preserved across a full reset (RIS).
++   *
++   * A NULL value pointer resets to the built-in default of true.
++   *
++   * Upstream assigns this option value 40; the local value avoids the
++   * experimental Kitty image options below.
++   *
++   * Input type: bool*
++   */
++  GHOSTTY_TERMINAL_OPT_RESIZE_PULL_SCROLLBACK = 42,
++
+   /**
+    * Set the maximum total decoded bytes a single Kitty clipboard protocol
+    * (OSC 5522) write transaction may accumulate. The limit is captured
+diff --git a/vendor/libghostty-vt/src/terminal/PageList.zig b/vendor/libghostty-vt/src/terminal/PageList.zig
+index 94ef9bb0..d915bcf6 100644
+--- a/vendor/libghostty-vt/src/terminal/PageList.zig
++++ b/vendor/libghostty-vt/src/terminal/PageList.zig
+@@ -1234,6 +1234,18 @@ pub const Resize = struct {
+     /// resize/reflow behavior depends on the cursor position.
+     cursor: ?Cursor = null,
+ 
++    /// Whether the resize may pull rows out of scrollback back into the
++    /// active area. If false, growing rows always appends blank rows at the
++    /// bottom and a column reflow keeps the top of the active area on the
++    /// same content, so a line that is fully in scrollback stays there.
++    /// A wrapped line with at least one row still in the active area may
++    /// still unwrap back into view.
++    ///
++    /// This should be false for ptys that keep their own screen buffer
++    /// without scrollback (e.g. Windows ConPTY), since they can't pull
++    /// rows back and would otherwise get out of sync with us.
++    pull_scrollback: bool = true,
++
+     pub const Cursor = struct {
+         x: size.CellCountInt,
+         y: size.CellCountInt,
+@@ -1295,7 +1307,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+         .gt => {
+             // We grow rows after cols so that we can do our unwrapping/reflow
+             // before we do a no-reflow grow.
+-            try self.resizeCols(cols, opts.cursor);
++            try self.resizeCols(cols, opts);
+             try self.resizeWithoutReflow(opts);
+         },
+ 
+@@ -1307,7 +1319,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+                 copy.cols = self.cols;
+                 break :opts copy;
+             });
+-            try self.resizeCols(cols, opts.cursor);
++            try self.resizeCols(cols, opts);
+         },
+     }
+ 
+@@ -1331,9 +1343,20 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+ fn resizeCols(
+     self: *PageList,
+     cols: size.CellCountInt,
+-    cursor: ?Resize.Cursor,
++    opts: Resize,
+ ) Allocator.Error!void {
+     assert(cols != self.cols);
++    const cursor = opts.cursor;
++
++    // The active area is always the last `rows` rows, so a reflow that
++    // changes the number of rows our text needs slides the active area
++    // over the content. If we aren't allowed to pull scrollback then we
++    // track the top of the active area so we can restore it afterwards.
++    const active_top: ?*Pin = if (!opts.pull_scrollback)
++        try self.trackPin(self.getTopLeft(.active))
++    else
++        null;
++    defer if (active_top) |p| self.untrackPin(p);
+ 
+     // If we have a cursor position (x,y), then we try under any col resizing
+     // to keep the same number remaining active rows beneath it. This is a
+@@ -1508,6 +1531,18 @@ fn resizeCols(
+         },
+     }
+ 
++    // If we can't pull scrollback then pad the bottom with blank rows until
++    // the old top of the active area is back at the top. If the reflow
++    // instead pushed it into scrollback (the text needs more rows than
++    // we have) then there is nothing to do. This subsumes the preserved
++    // cursor logic below since that also only exists to avoid a pull.
++    if (active_top) |p| {
++        if (self.pointFromPin(.active, p.*)) |pt| {
++            for (0..pt.active.y) |_| _ = try self.grow();
++        }
++        return;
++    }
++
+     // See preserved_cursor setup for why.
+     if (preserved_cursor) |c| cursor: {
+         const active_pt = self.pointFromPin(
+@@ -2855,12 +2890,18 @@ fn resizeWithoutReflow(self: *PageList, opts: Resize) Allocator.Error!void {
+                 // we want to try to preserve the y value of the old cursor.
+                 // In other words, we don't want to "pull down" scrollback.
+                 // This is purely a UX feature.
+-                if (opts.cursor) |cursor| cursor: {
+-                    if (cursor.y >= self.rows - 1) break :cursor;
+-
+-                    // Cursor is not at the bottom, so we just grow our
+-                    // rows and we're done. Cursor does NOT change for this
+-                    // since we're not pulling down scrollback.
++                //
++                // If we're not allowed to pull scrollback at all then we
++                // always do this regardless of the cursor.
++                const pull = pull: {
++                    if (!opts.pull_scrollback) break :pull false;
++                    const cursor = opts.cursor orelse break :pull true;
++                    break :pull cursor.y >= self.rows - 1;
++                };
++                if (!pull) {
++                    // We just grow our rows and we're done. Cursor does
++                    // NOT change for this since we're not pulling down
++                    // scrollback.
+                     const delta = rows - self.rows;
+                     self.rows = rows;
+                     for (0..delta) |_| _ = try self.grow();
+@@ -18107,6 +18148,48 @@ test "PageList resize reflow less cols cursor not on last line preserves locatio
+     } }, s.pointFromPin(.active, p.*).?);
+ }
+ 
++test "PageList resize reflow less cols no scrollback pull blank active" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++
++    var s = try init(alloc, .{ .cols = 5, .rows = 5, .max_size = 1 });
++    defer s.deinit();
++    try testing.expect(s.pages.first == s.pages.last);
++    const page = s.pages.first.?.page();
++    for (0..s.rows) |y| {
++        for (0..2) |x| {
++            const rac = page.getRowAndCell(x, y);
++            rac.cell.* = .{
++                .content_tag = .codepoint,
++                .content = .{ .codepoint = .{ .data = @intCast(x) } },
++            };
++        }
++    }
++
++    // Grow blank rows to push our rows back into scrollback
++    try s.growRows(5);
++    try testing.expectEqual(@as(usize, 10), s.totalRows());
++
++    const p = try s.trackPin(s.pin(.{ .active = .{ .x = 0, .y = 0 } }).?);
++    defer s.untrackPin(p);
++
++    // Resize with no cursor. Normally the trailing blank rows would be
++    // trimmed and the active area would slide up over our history.
++    try s.resize(.{
++        .cols = 4,
++        .reflow = true,
++        .pull_scrollback = false,
++    });
++    try testing.expectEqual(@as(usize, 4), s.cols);
++    try testing.expectEqual(@as(usize, 10), s.totalRows());
++
++    // The top of the active area should not move
++    try testing.expectEqual(point.Point{ .active = .{
++        .x = 0,
++        .y = 0,
++    } }, s.pointFromPin(.active, p.*).?);
++}
++
+ test "PageList resize reflow less cols copy style" {
+     const testing = std.testing;
+     const alloc = testing.allocator;
+diff --git a/vendor/libghostty-vt/src/terminal/Screen.zig b/vendor/libghostty-vt/src/terminal/Screen.zig
+index d0d2b929..de4dc675 100644
+--- a/vendor/libghostty-vt/src/terminal/Screen.zig
++++ b/vendor/libghostty-vt/src/terminal/Screen.zig
+@@ -2014,6 +2014,10 @@ pub const Resize = struct {
+     /// currently at a prompt. This detects OSC133 prompts lines and clears
+     /// them. If set to `.last`, only the most recent prompt line is cleared.
+     prompt_redraw: osc.semantic_prompt.Redraw = .false,
++
++    /// Whether the resize may pull rows out of scrollback back into the
++    /// active area. See PageList.Resize for details.
++    pull_scrollback: bool = true,
+ };
+ 
+ const resize_tw = tripwire.module(enum {
+@@ -2110,6 +2114,7 @@ pub inline fn resize(
+             .y = self.cursor.y,
+             .pin = self.cursor.page_pin,
+         },
++        .pull_scrollback = opts.pull_scrollback,
+     });
+ 
+     // No more failures are possible after this. Enforced by compiler
+@@ -7274,6 +7279,137 @@ test "Screen: resize (no reflow) more rows with scrollback cursor end" {
+     }
+ }
+ 
++test "Screen: resize (no reflow) more rows no scrollback pull" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const io = testing.io;
++
++    var s = try init(io, alloc, .{ .cols = 7, .rows = 3, .max_scrollback_bytes = 2 });
++    defer s.deinit();
++    const str = "1ABCD\n2EFGH\n3IJKL\n4ABCD\n5EFGH";
++    try s.testWriteString(str);
++
++    // Cursor is at the bottom so this would normally pull scrollback.
++    try testing.expectEqual(@as(size.CellCountInt, 2), s.cursor.y);
++    try s.resize(.{
++        .cols = 7,
++        .rows = 10,
++        .reflow = false,
++        .pull_scrollback = false,
++    });
++    try testing.expectEqual(@as(size.CellCountInt, 2), s.cursor.y);
++
++    {
++        const contents = try s.dumpStringAlloc(alloc, .{ .active = .{} });
++        defer alloc.free(contents);
++        try testing.expectEqualStrings("3IJKL\n4ABCD\n5EFGH", contents);
++    }
++    {
++        const contents = try s.dumpStringAlloc(alloc, .{ .screen = .{} });
++        defer alloc.free(contents);
++        try testing.expectEqualStrings(str, contents);
++    }
++}
++
++test "Screen: resize more cols no scrollback pull" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const io = testing.io;
++
++    var s = try init(io, alloc, .{ .cols = 5, .rows = 3, .max_scrollback_bytes = 2 });
++    defer s.deinit();
++    try s.testWriteString("1AAAA\n2BBBB\n3CCCCDD\n4E");
++    {
++        const contents = try s.dumpStringAlloc(alloc, .{ .active = .{} });
++        defer alloc.free(contents);
++        try testing.expectEqualStrings("3CCCC\nDD\n4E", contents);
++    }
++
++    // The wrapped line in the active area unwraps, freeing up a row. This
++    // would normally pull "2BBBB" back but we should get a blank row at
++    // the bottom instead.
++    try s.resize(.{ .cols = 10, .rows = 3, .pull_scrollback = false });
++    try testing.expectEqual(@as(size.CellCountInt, 2), s.cursor.x);
++    try testing.expectEqual(@as(size.CellCountInt, 1), s.cursor.y);
++
++    {
++        const contents = try s.dumpStringAlloc(alloc, .{ .active = .{} });
++        defer alloc.free(contents);
++        try testing.expectEqualStrings("3CCCCDD\n4E", contents);
++    }
++    {
++        const contents = try s.dumpStringAlloc(alloc, .{ .screen = .{} });
++        defer alloc.free(contents);
++        try testing.expectEqualStrings("1AAAA\n2BBBB\n3CCCCDD\n4E", contents);
++    }
++}
++
++test "Screen: resize more cols no scrollback pull wrap straddles scrollback" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const io = testing.io;
++
++    var s = try init(io, alloc, .{ .cols = 5, .rows = 3, .max_scrollback_bytes = 2 });
++    defer s.deinit();
++    try s.testWriteString("1AAAA\n2BBBBXX\n3C\n4D");
++    {
++        const contents = try s.dumpStringAlloc(alloc, .{ .active = .{} });
++        defer alloc.free(contents);
++        try testing.expectEqualStrings("XX\n3C\n4D", contents);
++    }
++
++    // The line isn't fully in scrollback so it is allowed to unwrap
++    // back into view, but nothing above it is.
++    try s.resize(.{ .cols = 10, .rows = 3, .pull_scrollback = false });
++    try testing.expectEqual(@as(size.CellCountInt, 2), s.cursor.y);
++
++    {
++        const contents = try s.dumpStringAlloc(alloc, .{ .active = .{} });
++        defer alloc.free(contents);
++        try testing.expectEqualStrings("2BBBBXX\n3C\n4D", contents);
++    }
++}
++
++test "Screen: resize more cols and rows no scrollback pull" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const io = testing.io;
++
++    var s = try init(io, alloc, .{ .cols = 5, .rows = 3, .max_scrollback_bytes = 2 });
++    defer s.deinit();
++    try s.testWriteString("1AAAA\n2BBBB\n3CCCCDD\n4E");
++
++    try s.resize(.{ .cols = 10, .rows = 5, .pull_scrollback = false });
++    try testing.expectEqual(@as(size.CellCountInt, 1), s.cursor.y);
++
++    {
++        const contents = try s.dumpStringAlloc(alloc, .{ .active = .{} });
++        defer alloc.free(contents);
++        try testing.expectEqualStrings("3CCCCDD\n4E", contents);
++    }
++}
++
++test "Screen: resize less cols no scrollback pull" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const io = testing.io;
++
++    var s = try init(io, alloc, .{ .cols = 10, .rows = 3, .max_scrollback_bytes = 2 });
++    defer s.deinit();
++    try s.testWriteString("0Z\n1AAAA\n2BBBBXX\n3C");
++
++    // Wrapping needs more rows than we have so the top of the active
++    // area still scrolls off as usual.
++    try s.resize(.{ .cols = 5, .rows = 3, .pull_scrollback = false });
++    try testing.expectEqual(@as(size.CellCountInt, 2), s.cursor.y);
++
++    {
++        const contents = try s.dumpStringAlloc(alloc, .{ .active = .{} });
++        defer alloc.free(contents);
++        try testing.expectEqualStrings("2BBBB\nXX\n3C", contents);
++    }
++}
++
+ test "Screen: resize (no reflow) less rows with scrollback" {
+     const testing = std.testing;
+     const alloc = testing.allocator;
+diff --git a/vendor/libghostty-vt/src/terminal/Terminal.zig b/vendor/libghostty-vt/src/terminal/Terminal.zig
+index e9cc3b8e..4247a03b 100644
+--- a/vendor/libghostty-vt/src/terminal/Terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/Terminal.zig
+@@ -127,6 +127,13 @@ flags: packed struct {
+     /// represented as visible so callers behave conservatively.
+     visible: bool = true,
+ 
++    /// Whether a resize may pull rows out of scrollback back into the
++    /// active area. This should be false if the pty keeps its own screen
++    /// buffer without scrollback (e.g. Windows ConPTY) so that we stay in
++    /// sync with it. See PageList.Resize for details. This is configuration
++    /// rather than terminal state so it is preserved across a full reset.
++    resize_pull_scrollback: bool = true,
++
+     /// True if the terminal is in a password entry mode. This is set
+     /// to true based on termios state. This is set
+     /// to true based on termios state.
+@@ -4089,6 +4096,7 @@ pub fn resize(
+         .rows = opts.rows,
+         .reflow = self.modes.get(.wraparound),
+         .prompt_redraw = self.flags.shell_redraws_prompt,
++        .pull_scrollback = self.flags.resize_pull_scrollback,
+     });
+ 
+     // Alternate screen, if it exists, doesn't reflow. The primary resize
+@@ -4102,6 +4110,7 @@ pub fn resize(
+                 .cols = opts.cols,
+                 .rows = opts.rows,
+                 .reflow = false,
++                .pull_scrollback = self.flags.resize_pull_scrollback,
+             }) catch |err| break :resize err;
+ 
+             // Resize succeeded.
+@@ -4920,11 +4929,16 @@ pub fn fullReset(self: *Terminal) void {
+ 
+     // Rest our basic state
+     const visible = self.flags.visible;
++    const resize_pull_scrollback = self.flags.resize_pull_scrollback;
+     self.modes.reset();
+     self.flags = .{
+         // Visibility belongs to the view rather than terminal state, so a
+         // terminal reset must not make a hidden view potentially visible.
+         .visible = visible,
++
++        // This is configuration based on the pty rather than terminal
++        // state, so a terminal reset must not change it.
++        .resize_pull_scrollback = resize_pull_scrollback,
+     };
+     self.tabstops.reset(TABSTOP_INTERVAL);
+     self.previous_char = null;
+@@ -15853,6 +15867,27 @@ test "Terminal: resize with high unique style per cell" {
+     try t.resize(alloc, .{ .cols = 60, .rows = 30 });
+ }
+ 
++test "Terminal: resize without scrollback pull" {
++    const alloc = testing.allocator;
++    const io_impl = testing.io;
++    var t = try init(io_impl, alloc, .{ .cols = 5, .rows = 3 });
++    defer t.deinit(alloc);
++    t.flags.resize_pull_scrollback = false;
++
++    // This is configuration so it should survive a reset.
++    t.fullReset();
++    try testing.expect(!t.flags.resize_pull_scrollback);
++
++    try t.printString("1\n2\n3\n4\n5");
++    try t.resize(alloc, .{ .cols = 5, .rows = 5 });
++    try testing.expectEqual(@as(size.CellCountInt, 2), t.screens.active.cursor.y);
++    {
++        const str = try t.plainString(alloc);
++        defer alloc.free(str);
++        try testing.expectEqualStrings("3\n4\n5", str);
++    }
++}
++
+ test "Terminal: resize with high unique style per cell with wrapping" {
+     const alloc = testing.allocator;
+     const io_impl = testing.io;
+diff --git a/vendor/libghostty-vt/src/terminal/c/terminal.zig b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+index e825183e..226d4006 100644
+--- a/vendor/libghostty-vt/src/terminal/c/terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+@@ -1181,6 +1181,8 @@ pub const Option = enum(c_int) {
+     mode = 34,
+     unknown_sequence = 35,
+     unknown_max_bytes = 36,
++    // Upstream uses 40; the experimental Kitty image options own 40 and 41 here.
++    resize_pull_scrollback = 42,
+     terminfo_name = 37,
+     clipboard_read = 38,
+     clipboard_write_max_bytes = 39,
+@@ -1215,6 +1217,7 @@ pub const Option = enum(c_int) {
+             .kitty_image_medium_shared_mem,
+             .glyph_protocol,
+             .title_report,
++            .resize_pull_scrollback,
+             => ?*const bool,
+             .kitty_image_medium_temp_file => ?*const lib.String,
+             .apc_max_bytes,
+@@ -1447,6 +1450,8 @@ fn setTyped(
+         ),
+         .unknown_max_bytes => wrapper.stream.handler.apc_handler.unknown_max_bytes =
+             if (value) |ptr| ptr.* else 0,
++        .resize_pull_scrollback => wrapper.terminal.flags.resize_pull_scrollback =
++            if (value) |ptr| ptr.* else true,
+         .clipboard_write_max_bytes => wrapper.stream.handler.kitty_clipboard_write_max_bytes =
+             if (value) |ptr| ptr.* else kitty_clipboard.max_write_size,
+         .mode, .mode_default => {
+@@ -2253,6 +2258,26 @@ test "continuation internal allocation and restoration" {
+     );
+ }
+ 
++test "set resize pull scrollback" {
++    var t: Terminal = null;
++    try testing.expectEqual(Result.success, new(
++        &lib.alloc.test_allocator,
++        &t,
++        80,
++        24,
++    ));
++    defer free(t);
++    try testing.expect(t.?.terminal.flags.resize_pull_scrollback);
++
++    const disabled = false;
++    try testing.expectEqual(Result.success, set(t, .resize_pull_scrollback, &disabled));
++    try testing.expect(!t.?.terminal.flags.resize_pull_scrollback);
++
++    // NULL restores the default.
++    try testing.expectEqual(Result.success, set(t, .resize_pull_scrollback, null));
++    try testing.expect(t.?.terminal.flags.resize_pull_scrollback);
++}
++
+ test "set scrollback limits" {
+     var t: Terminal = null;
+     try testing.expectEqual(Result.success, new(

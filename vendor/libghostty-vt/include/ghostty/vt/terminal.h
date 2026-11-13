@@ -1557,6 +1557,29 @@ typedef enum GHOSTTY_ENUM_TYPED {
   GHOSTTY_TERMINAL_OPT_CLIPBOARD_READ = 38,
 
   /**
+   * Set whether a resize may pull rows out of scrollback back into the
+   * active area.
+   *
+   * When true, growing rows reveals scrollback if the cursor is on the
+   * bottom row, and a column reflow that needs fewer rows reveals
+   * scrollback as well. When false, growing rows always appends blank rows
+   * at the bottom and a column reflow keeps the top of the active area on
+   * the same content, so a line that is fully in scrollback stays there. A
+   * soft-wrapped line with at least one row still in the active area may
+   * still unwrap back into view.
+   *
+   * This is preserved across a full reset (RIS).
+   *
+   * A NULL value pointer resets to the built-in default of true.
+   *
+   * Upstream assigns this option value 40; the local value avoids the
+   * experimental Kitty image options below.
+   *
+   * Input type: bool*
+   */
+  GHOSTTY_TERMINAL_OPT_RESIZE_PULL_SCROLLBACK = 42,
+
+  /**
    * Set the maximum total decoded bytes a single Kitty clipboard protocol
    * (OSC 5522) write transaction may accumulate. The limit is captured
    * when a transaction begins; an in-flight transaction keeps the limit

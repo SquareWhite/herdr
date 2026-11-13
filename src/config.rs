@@ -102,6 +102,10 @@ impl Config {
             .unwrap_or(true)
     }
 
+    pub fn resize_pull_scrollback(&self) -> bool {
+        self.terminal.resize_pull_scrollback.unwrap_or(true)
+    }
+
     pub fn prefix_keys(&self) -> Vec<(KeyCode, KeyModifiers)> {
         self.validated_keybinds().1
     }

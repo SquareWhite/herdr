@@ -76,6 +76,17 @@ pub(crate) const MIN_PANE_COLS: u16 = 4;
 const PANE_COLORTERM: &str = "truecolor";
 const FISH_HANDLE_REFLOW_ENV_VAR: &str = "fish_handle_reflow";
 
+static RESIZE_PULL_SCROLLBACK: AtomicBool = AtomicBool::new(true);
+
+/// Whether new pane terminals pull scrollback back into view when they grow.
+pub(crate) fn set_resize_pull_scrollback(enabled: bool) {
+    RESIZE_PULL_SCROLLBACK.store(enabled, Ordering::Release);
+}
+
+pub(crate) fn resize_pull_scrollback() -> bool {
+    RESIZE_PULL_SCROLLBACK.load(Ordering::Acquire)
+}
+
 fn terminal_compression_permits() -> Arc<tokio::sync::Semaphore> {
     static PERMITS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
     PERMITS
@@ -2532,6 +2543,9 @@ impl PaneRuntime {
         let mut terminal = crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         terminal
+            .set_resize_pull_scrollback(resize_pull_scrollback())
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        terminal
             .resize(cols, rows, cell_width_px, cell_height_px)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         if crate::kitty_graphics::is_enabled() {
@@ -2703,6 +2717,9 @@ impl PaneRuntime {
 
         let (response_tx, _response_rx) = mpsc::channel::<Bytes>(1);
         let mut terminal = crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        terminal
+            .set_resize_pull_scrollback(resize_pull_scrollback())
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         if crate::kitty_graphics::is_enabled() {
             terminal

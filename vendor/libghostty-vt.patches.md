@@ -228,3 +228,48 @@ just test-one kitty_file_image_survives
 (cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='experimental PNG')
 just check
 ```
+
+## 0008 switch for pulling scrollback back into view on resize
+
+status: active
+
+patch: `vendor/patches/libghostty-vt/0008-resize-pull-scrollback.patch`
+
+herdr issue: none
+
+upstream discussion: not opened
+
+upstream pr: not opened; backports Ghostty's `Terminal.flags.resize_pull_scrollback`
+and `GHOSTTY_TERMINAL_OPT_RESIZE_PULL_SCROLLBACK` (Ghostty 1.4.0)
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/terminal.h`
+- `vendor/libghostty-vt/src/terminal/PageList.zig`
+- `vendor/libghostty-vt/src/terminal/Screen.zig`
+- `vendor/libghostty-vt/src/terminal/Terminal.zig`
+- `vendor/libghostty-vt/src/terminal/c/terminal.zig`
+
+reason: When a pane grows taller, libghostty-vt pulls rows out of scrollback
+back into the active area. A program that redraws a bottom-anchored block with
+relative cursor moves (Ink-style TUIs) can't reach rows that scrolled off while
+the pane was short, so the pull brings stale copies of its block back on screen
+above the live one. `terminal.resize_pull_scrollback = false` turns the pull off:
+growing appends blank rows and a column reflow keeps the active area's top row.
+The option keeps upstream's semantics, including surviving a full reset, but
+uses local value 42 because patch 0007 owns upstream's value 40 here. The new
+enum entries sit apart from patch 0007's lines so both patches stay independent.
+
+remove when: the vendored source has `GHOSTTY_TERMINAL_OPT_RESIZE_PULL_SCROLLBACK`
+upstream; switch Herdr's binding to upstream's value at the same time.
+
+verification:
+
+```sh
+just test-one resize_pull_scrollback
+(cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='scrollback pull')
+(cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='resize pull scrollback')
+just maintenance-test
+```

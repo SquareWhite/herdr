@@ -120,6 +120,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Render pane images in Kitty graphics-compatible outer terminals.
 # kitty_graphics = true
 
+# Pull scrollback back into view when a pane grows taller, as most terminals do.
+# Set false to keep the screen's top row in place and add blank rows below.
+# resize_pull_scrollback = true
+
 [update]
 # Update channel used by background version checks and `herdr update`.
 # Stable builds default to "stable". Windows preview builds default to "preview"

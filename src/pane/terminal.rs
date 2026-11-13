@@ -6107,6 +6107,33 @@ mod tests {
     }
 
     #[test]
+    fn resize_pull_scrollback_controls_history_after_shrink_and_grow() {
+        for (pull, first_row, prompt_row) in [(true, "000283", 17), (false, "000295", 5)] {
+            let (tx, _rx) = mpsc::channel(4);
+            let mut terminal = crate::ghostty::Terminal::new(20, 14, 100_000).unwrap();
+            terminal.set_resize_pull_scrollback(pull).unwrap();
+            write_numbered_lines(&mut terminal, 300);
+            terminal.write(b"$ ");
+            let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+
+            pane.resize(6, 20, 0, 0);
+            pane.resize(18, 20, 0, 0);
+
+            let visible = pane.visible_text();
+            let rows: Vec<&str> = visible.lines().map(str::trim_end).collect();
+            assert_eq!(rows.first(), Some(&first_row), "pull={pull}: {visible:?}");
+            assert_eq!(
+                rows.iter().position(|row| *row == "$"),
+                Some(prompt_row),
+                "pull={pull}: {visible:?}"
+            );
+            assert!(rows[prompt_row + 1..].iter().all(|row| row.is_empty()));
+            // Resize recovery must not replay history into the blank rows.
+            assert_eq!(pane.recent_text(400).matches("000299").count(), 1);
+        }
+    }
+
+    #[test]
     fn process_pty_bytes_answers_xtwinops_size_queries() {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();

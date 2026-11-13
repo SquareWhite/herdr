@@ -260,6 +260,8 @@ pub struct TerminalConfig {
     pub new_cwd: NewTerminalCwdConfig,
     /// Render Kitty graphics in compatible outer terminals. Default: true.
     pub kitty_graphics: Option<bool>,
+    /// Pull scrollback back into view when a pane grows taller. Default: true.
+    pub resize_pull_scrollback: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
