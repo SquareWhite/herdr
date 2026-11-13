@@ -450,8 +450,8 @@
         {
           "key": "terminal.resize_pull_scrollback",
           "type": "boolean",
-          "default": "true",
-          "description": "Pull scrollback back into view when a pane grows taller, as most terminals do. Set false to keep the screen's top row in place and add blank rows below it; output that scrolled off stays in scrollback. Restart the server after changing it."
+          "default": "false",
+          "description": "Pull scrollback back into view when a pane grows taller, as most terminals do. Off by default: the screen's top row stays in place and blank rows appear below it; output that scrolled off stays in scrollback. Set true for the usual terminal behaviour. Restart the server after changing it."
         }
       ]
     },

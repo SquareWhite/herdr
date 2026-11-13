@@ -76,7 +76,7 @@ pub(crate) const MIN_PANE_COLS: u16 = 4;
 const PANE_COLORTERM: &str = "truecolor";
 const FISH_HANDLE_REFLOW_ENV_VAR: &str = "fish_handle_reflow";
 
-static RESIZE_PULL_SCROLLBACK: AtomicBool = AtomicBool::new(true);
+static RESIZE_PULL_SCROLLBACK: AtomicBool = AtomicBool::new(false);
 
 /// Whether new pane terminals pull scrollback back into view when they grow.
 pub(crate) fn set_resize_pull_scrollback(enabled: bool) {

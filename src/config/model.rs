@@ -260,7 +260,7 @@ pub struct TerminalConfig {
     pub new_cwd: NewTerminalCwdConfig,
     /// Render Kitty graphics in compatible outer terminals. Default: true.
     pub kitty_graphics: Option<bool>,
-    /// Pull scrollback back into view when a pane grows taller. Default: true.
+    /// Pull scrollback back into view when a pane grows taller. Default: false.
     pub resize_pull_scrollback: Option<bool>,
 }
 
@@ -2054,6 +2054,20 @@ kitty_graphics = false
         )
         .unwrap();
         assert!(!config.kitty_graphics_enabled());
+    }
+
+    #[test]
+    fn resize_pull_scrollback_default_off_with_opt_in() {
+        assert!(!Config::default().resize_pull_scrollback());
+
+        let config: Config = toml::from_str(
+            r#"
+[terminal]
+resize_pull_scrollback = true
+"#,
+        )
+        .unwrap();
+        assert!(config.resize_pull_scrollback());
     }
 
     #[test]

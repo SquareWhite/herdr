@@ -103,7 +103,7 @@ impl Config {
     }
 
     pub fn resize_pull_scrollback(&self) -> bool {
-        self.terminal.resize_pull_scrollback.unwrap_or(true)
+        self.terminal.resize_pull_scrollback.unwrap_or(false)
     }
 
     pub fn prefix_keys(&self) -> Vec<(KeyCode, KeyModifiers)> {

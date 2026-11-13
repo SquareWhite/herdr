@@ -121,8 +121,8 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # kitty_graphics = true
 
 # Pull scrollback back into view when a pane grows taller, as most terminals do.
-# Set false to keep the screen's top row in place and add blank rows below.
-# resize_pull_scrollback = true
+# Off by default: the screen's top row stays in place and blank rows appear below.
+# resize_pull_scrollback = false
 
 [update]
 # Update channel used by background version checks and `herdr update`.
